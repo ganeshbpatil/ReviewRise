@@ -1,29 +1,58 @@
 #!/bin/bash
-set -e
+# ============================================================
+# ReviewRise OS V2 — Database Backup to Cloudflare R2
+# Runs daily at 2am via cron
+# ============================================================
+set -euo pipefail
 
-DATE=$(date +%Y-%m-%d-%H%M)
-BACKUP_DIR="/tmp/reviewrise-backup"
-R2_BUCKET="${R2_BUCKET_NAME:-reviewrise-backups}"
+APP_DIR="/opt/reviewrise"
+DATE=$(date +%Y-%m-%d-%H%M%S)
+BACKUP_FILE="postgres-${DATE}.sql.gz"
+BACKUP_PATH="/tmp/${BACKUP_FILE}"
+LOG_PREFIX="[$(date '+%Y-%m-%d %H:%M:%S')]"
 
-mkdir -p "$BACKUP_DIR"
+# Load env
+set -a
+source "$APP_DIR/.env.production"
+set +a
 
-echo "[$DATE] Starting backup..."
+echo "$LOG_PREFIX Starting backup..."
 
-# PostgreSQL backup
-docker exec reviewrise-postgres pg_dump -U reviewrise reviewrise | gzip > "$BACKUP_DIR/postgres-$DATE.sql.gz"
-echo "[$DATE] PostgreSQL dumped"
+# ── Dump PostgreSQL ───────────────────────────────────────────
+docker exec reviewrise-postgres \
+  pg_dump -U reviewrise -d reviewrise \
+  --clean --if-exists --no-owner --no-acl \
+  | gzip -9 > "$BACKUP_PATH"
 
-# Upload to R2 using rclone or aws cli
-if command -v aws &> /dev/null; then
-  aws s3 cp "$BACKUP_DIR/postgres-$DATE.sql.gz" \
-    "s3://$R2_BUCKET/postgres/$DATE.sql.gz" \
-    --endpoint-url "${R2_ENDPOINT}" \
-    --no-progress
-  echo "[$DATE] Uploaded to R2"
-fi
+SIZE=$(du -sh "$BACKUP_PATH" | cut -f1)
+echo "$LOG_PREFIX Dump complete: $BACKUP_FILE ($SIZE)"
 
-# Clean local backup
-rm -rf "$BACKUP_DIR"
+# ── Upload to R2 ─────────────────────────────────────────────
+aws s3 cp "$BACKUP_PATH" \
+  "s3://${R2_BUCKET_NAME}/backups/postgres/${BACKUP_FILE}" \
+  --endpoint-url "$R2_ENDPOINT" \
+  --no-progress \
+  --storage-class STANDARD
 
-# Remove backups older than 30 days from R2
-echo "[$DATE] Backup complete"
+echo "$LOG_PREFIX Uploaded to R2: backups/postgres/$BACKUP_FILE"
+
+# ── Clean local temp ─────────────────────────────────────────
+rm -f "$BACKUP_PATH"
+
+# ── Prune R2 backups older than 30 days ──────────────────────
+CUTOFF=$(date -d '30 days ago' +%Y-%m-%d 2>/dev/null || date -v-30d +%Y-%m-%d)
+echo "$LOG_PREFIX Pruning backups older than $CUTOFF..."
+
+aws s3 ls "s3://${R2_BUCKET_NAME}/backups/postgres/" \
+  --endpoint-url "$R2_ENDPOINT" \
+  | awk '{print $4}' \
+  | while read -r key; do
+      KEY_DATE=$(echo "$key" | grep -oP '\d{4}-\d{2}-\d{2}' | head -1 || true)
+      if [[ -n "$KEY_DATE" && "$KEY_DATE" < "$CUTOFF" ]]; then
+        aws s3 rm "s3://${R2_BUCKET_NAME}/backups/postgres/$key" \
+          --endpoint-url "$R2_ENDPOINT" --quiet
+        echo "$LOG_PREFIX Deleted old backup: $key"
+      fi
+    done
+
+echo "$LOG_PREFIX Backup complete"
