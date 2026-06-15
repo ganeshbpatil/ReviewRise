@@ -1,0 +1,1032 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  AGENCY_OWNER
+  AGENCY_ADMIN
+  ACCOUNT_MANAGER
+  SALES_USER
+  CLIENT_OWNER
+  CLIENT_MANAGER
+  LOCATION_MANAGER
+  READ_ONLY
+}
+
+enum SubscriptionPlan {
+  FREE
+  STARTER
+  GROWTH
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELLED
+  PAUSED
+}
+
+enum ReviewSentiment {
+  VERY_POSITIVE
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+  VERY_NEGATIVE
+}
+
+enum ReviewStatus {
+  PENDING
+  REPLIED
+  FLAGGED
+  ARCHIVED
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum CampaignType {
+  EMAIL
+  SMS
+  WHATSAPP
+  QR_CODE
+  LINK
+}
+
+enum AssetType {
+  INSTAGRAM_POST
+  FACEBOOK_POST
+  LINKEDIN_POST
+  TESTIMONIAL
+  LANDING_PAGE
+  CAROUSEL
+  REEL_SCRIPT
+  VIDEO_SCRIPT
+  AD_COPY
+}
+
+enum AssetStatus {
+  PENDING
+  GENERATED
+  APPROVED
+  REJECTED
+  PUBLISHED
+}
+
+enum NotificationType {
+  NEW_REVIEW
+  NEGATIVE_REVIEW
+  REPLY_NEEDED
+  CAMPAIGN_COMPLETE
+  COMPETITOR_ALERT
+  AI_RECOMMENDATION
+  BILLING_ALERT
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  IMPORT
+  API_CALL
+}
+
+// ─── Core Auth & Tenancy ──────────────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String?
+  avatarUrl     String?
+  passwordHash  String?
+  role          UserRole @default(READ_ONLY)
+  isActive      Boolean  @default(true)
+  emailVerified DateTime?
+  lastLoginAt   DateTime?
+
+  agencyId   String?
+  agency     Agency?  @relation(fields: [agencyId], references: [id])
+  clientId   String?
+  client     Client?  @relation(fields: [clientId], references: [id])
+  locationId String?
+  location   Location? @relation(fields: [locationId], references: [id])
+
+  sessions      Session[]
+  notifications Notification[]
+  activityLogs  ActivityLog[]
+  auditLogs     AuditLog[]
+  aiActions     AiAction[]
+  reviewReplies ReviewReply[]
+  tasks         Task[]         @relation("TaskAssignee")
+  createdTasks  Task[]         @relation("TaskCreator")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agencyId])
+  @@index([clientId])
+  @@index([email])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ─── Agency & Multi-Tenancy ───────────────────────────────────────────────────
+
+model Agency {
+  id          String  @id @default(cuid())
+  name        String
+  slug        String  @unique
+  logoUrl     String?
+  website     String?
+  phone       String?
+  email       String?
+  address     String?
+  city        String?
+  state       String?
+  country     String  @default("US")
+  timezone    String  @default("America/New_York")
+  isActive    Boolean @default(true)
+  whiteLabel  Boolean @default(false)
+  customDomain String?
+
+  ownerId String?
+
+  users         User[]
+  clients       Client[]
+  subscriptions Subscription[]
+  settings      AgencySettings?
+  auditLogs     AuditLog[]
+  invoices      Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+}
+
+model AgencySettings {
+  id                    String  @id @default(cuid())
+  agencyId              String  @unique
+  agency                Agency  @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  defaultReplyTone      String  @default("professional")
+  autoReplyEnabled      Boolean @default(false)
+  autoReplyThreshold    Int     @default(4)
+  notifyOnNegative      Boolean @default(true)
+  notifyOnAllReviews    Boolean @default(false)
+  weeklyReportEnabled   Boolean @default(true)
+  monthlyReportEnabled  Boolean @default(true)
+  brandPrimaryColor     String  @default("#3B82F6")
+  brandSecondaryColor   String  @default("#1E40AF")
+
+  openaiApiKey   String?
+  anthropicApiKey String?
+  googleApiKey    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Clients & Locations ──────────────────────────────────────────────────────
+
+model Client {
+  id          String  @id @default(cuid())
+  agencyId    String
+  agency      Agency  @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  name        String
+  slug        String
+  logoUrl     String?
+  website     String?
+  phone       String?
+  email       String?
+  industry    String?
+  isActive    Boolean @default(true)
+  notes       String?
+
+  users           User[]
+  locations       Location[]
+  subscriptions   Subscription[]
+  googleAccounts  GoogleAccount[]
+  campaigns       ReviewCampaign[]
+  competitors     Competitor[]
+  tasks           Task[]
+  notifications   Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([agencyId, slug])
+  @@index([agencyId])
+}
+
+model Location {
+  id         String  @id @default(cuid())
+  agencyId   String
+  clientId   String
+  client     Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  name       String
+  address    String?
+  city       String?
+  state      String?
+  country    String  @default("US")
+  postalCode String?
+  phone      String?
+  email      String?
+  timezone   String  @default("America/New_York")
+  isActive   Boolean @default(true)
+  isPrimary  Boolean @default(false)
+
+  users                User[]
+  googleBusinessProfiles GoogleBusinessProfile[]
+  reviewCampaigns      ReviewCampaign[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+// ─── Subscriptions & Billing ─────────────────────────────────────────────────
+
+model Subscription {
+  id       String             @id @default(cuid())
+  agencyId String?
+  agency   Agency?            @relation(fields: [agencyId], references: [id])
+  clientId String?
+  client   Client?            @relation(fields: [clientId], references: [id])
+
+  plan          SubscriptionPlan   @default(FREE)
+  status        SubscriptionStatus @default(TRIALING)
+  priceMonthly  Decimal            @default(0)
+  priceAnnual   Decimal            @default(0)
+  isAnnual      Boolean            @default(false)
+  maxLocations  Int                @default(1)
+  maxUsers      Int                @default(3)
+  trialEndsAt   DateTime?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelledAt        DateTime?
+
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+
+  invoices Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agencyId])
+  @@index([clientId])
+}
+
+model Invoice {
+  id           String  @id @default(cuid())
+  agencyId     String
+  agency       Agency  @relation(fields: [agencyId], references: [id])
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  invoiceNumber String   @unique
+  amount        Decimal
+  currency      String   @default("USD")
+  status        String   @default("unpaid")
+  dueDate       DateTime?
+  paidAt        DateTime?
+  stripeInvoiceId String?
+  pdfUrl        String?
+
+  payments Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agencyId])
+}
+
+model Payment {
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+
+  amount          Decimal
+  currency        String  @default("USD")
+  method          String
+  status          String
+  stripePaymentId String?
+  processedAt     DateTime?
+
+  createdAt DateTime @default(now())
+}
+
+// ─── Google Business Profile ──────────────────────────────────────────────────
+
+model GoogleAccount {
+  id       String  @id @default(cuid())
+  agencyId String
+  clientId String
+  client   Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  googleAccountId String
+  email           String
+  name            String?
+  accessToken     String?
+  refreshToken    String?
+  tokenExpiresAt  DateTime?
+  scopes          String[]
+  isActive        Boolean  @default(true)
+
+  profiles GoogleBusinessProfile[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, googleAccountId])
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+model GoogleBusinessProfile {
+  id              String  @id @default(cuid())
+  agencyId        String
+  clientId        String
+  locationId      String?
+  location        Location? @relation(fields: [locationId], references: [id])
+  googleAccountId String
+  googleAccount   GoogleAccount @relation(fields: [googleAccountId], references: [id], onDelete: Cascade)
+
+  placeId         String?
+  accountId       String
+  locationName    String
+  storeName       String?
+  primaryCategory String?
+  additionalCategories String[]
+  address         String?
+  city            String?
+  state           String?
+  postalCode      String?
+  country         String?
+  phone           String?
+  website         String?
+  description     String?
+  openingDate     DateTime?
+  googleMapsUrl   String?
+  isVerified      Boolean @default(false)
+  isActive        Boolean @default(true)
+
+  avgRating        Float   @default(0)
+  totalReviews     Int     @default(0)
+  reputationScore  Float   @default(0)
+  lastSyncedAt     DateTime?
+
+  reviews          GoogleReview[]
+  snapshots        ProfileSnapshot[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([agencyId])
+  @@index([googleAccountId])
+}
+
+model ProfileSnapshot {
+  id        String              @id @default(cuid())
+  profileId String
+  profile   GoogleBusinessProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  snapshotDate     DateTime
+  avgRating        Float
+  totalReviews     Int
+  searchViews      Int     @default(0)
+  mapViews         Int     @default(0)
+  websiteClicks    Int     @default(0)
+  callClicks       Int     @default(0)
+  directionClicks  Int     @default(0)
+  photoViews       Int     @default(0)
+  totalPhotos      Int     @default(0)
+  totalPosts       Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([profileId, snapshotDate])
+  @@index([profileId])
+}
+
+// ─── Reviews ─────────────────────────────────────────────────────────────────
+
+model GoogleReview {
+  id        String              @id @default(cuid())
+  agencyId  String
+  clientId  String
+  profileId String
+  profile   GoogleBusinessProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  googleReviewId  String   @unique
+  reviewerName    String?
+  reviewerPhotoUrl String?
+  rating          Int
+  comment         String?
+  publishedAt     DateTime
+  updatedAt       DateTime?
+  status          ReviewStatus    @default(PENDING)
+  isOwnerReplied  Boolean         @default(false)
+  ownerReplyText  String?
+  ownerReplyDate  DateTime?
+
+  sentiment       ReviewSentiment?
+  sentimentScore  Float?
+  reputationScore Float?
+  isHighlighted   Boolean  @default(false)
+  isCurated       Boolean  @default(false)
+  curatedReason   String?
+
+  reply     ReviewReply?
+  analysis  ReviewAnalysis?
+  assets    ReviewAsset[]
+
+  createdAt DateTime @default(now())
+
+  @@index([profileId])
+  @@index([clientId])
+  @@index([agencyId])
+  @@index([rating])
+  @@index([publishedAt])
+}
+
+model ReviewReply {
+  id       String      @id @default(cuid())
+  reviewId String      @unique
+  review   GoogleReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  authorId String?
+  author   User?       @relation(fields: [authorId], references: [id])
+
+  replyText     String
+  isAiGenerated Boolean  @default(false)
+  isPublished   Boolean  @default(false)
+  publishedAt   DateTime?
+  tone          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ReviewAnalysis {
+  id       String      @id @default(cuid())
+  reviewId String      @unique
+  review   GoogleReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  sentiment       ReviewSentiment
+  sentimentScore  Float
+  keywords        String[]
+  topics          String[]
+  staffMentions   String[]
+  serviceMentions String[]
+  productMentions String[]
+  positiveSignals String[]
+  negativeSignals String[]
+  categories      String[]
+  language        String?
+  isProcessed     Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ReviewLibrary {
+  id         String  @id @default(cuid())
+  agencyId   String
+  clientId   String
+
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+
+  collections ReviewCollection[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+model ReviewCollection {
+  id        String        @id @default(cuid())
+  libraryId String
+  library   ReviewLibrary @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  agencyId  String
+  clientId  String
+
+  name        String
+  description String?
+  category    String?
+  tags        String[]
+  isActive    Boolean @default(true)
+
+  assets ReviewAsset[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([libraryId])
+}
+
+model ReviewAsset {
+  id           String          @id @default(cuid())
+  reviewId     String
+  review       GoogleReview    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  collectionId String?
+  collection   ReviewCollection? @relation(fields: [collectionId], references: [id])
+  agencyId     String
+  clientId     String
+
+  assetType    AssetType
+  status       AssetStatus @default(PENDING)
+  content      String?
+  mediaUrl     String?
+  thumbnailUrl String?
+  metadata     Json?
+  approvedBy   String?
+  approvedAt   DateTime?
+  publishedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([reviewId])
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+// ─── Review Campaigns ────────────────────────────────────────────────────────
+
+model ReviewCampaign {
+  id         String  @id @default(cuid())
+  agencyId   String
+  clientId   String
+  client     Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  locationId String?
+  location   Location? @relation(fields: [locationId], references: [id])
+
+  name        String
+  description String?
+  type        CampaignType   @default(EMAIL)
+  status      CampaignStatus @default(DRAFT)
+
+  targetRating     Int     @default(5)
+  reviewLink       String?
+  customMessage    String?
+  subject          String?
+  fromName         String?
+  fromEmail        String?
+  scheduledAt      DateTime?
+  completedAt      DateTime?
+  totalSent        Int @default(0)
+  totalOpened      Int @default(0)
+  totalClicked     Int @default(0)
+  totalReviews     Int @default(0)
+
+  messages  CampaignMessage[]
+  analytics CampaignAnalytic[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+model CampaignMessage {
+  id         String         @id @default(cuid())
+  campaignId String
+  campaign   ReviewCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  recipientName  String?
+  recipientEmail String?
+  recipientPhone String?
+  status         String  @default("pending")
+  sentAt         DateTime?
+  openedAt       DateTime?
+  clickedAt      DateTime?
+  reviewedAt     DateTime?
+  messageId      String?
+
+  createdAt DateTime @default(now())
+
+  @@index([campaignId])
+}
+
+model CampaignAnalytic {
+  id         String         @id @default(cuid())
+  campaignId String
+  campaign   ReviewCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  date          DateTime
+  sent          Int @default(0)
+  opened        Int @default(0)
+  clicked       Int @default(0)
+  reviews       Int @default(0)
+  avgRating     Float @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([campaignId, date])
+  @@index([campaignId])
+}
+
+// ─── Competitor Tracking ─────────────────────────────────────────────────────
+
+model Competitor {
+  id       String @id @default(cuid())
+  agencyId String
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  name          String
+  placeId       String?
+  googleMapsUrl String?
+  website       String?
+  category      String?
+  address       String?
+  city          String?
+  state         String?
+  isActive      Boolean @default(true)
+
+  avgRating      Float @default(0)
+  totalReviews   Int   @default(0)
+  lastScrapedAt  DateTime?
+
+  reviews   CompetitorReview[]
+  snapshots CompetitorSnapshot[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+model CompetitorReview {
+  id           String     @id @default(cuid())
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  externalId    String?
+  reviewerName  String?
+  rating        Int
+  comment       String?
+  publishedAt   DateTime
+  sentiment     ReviewSentiment?
+  keywords      String[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([competitorId, externalId])
+  @@index([competitorId])
+}
+
+model CompetitorSnapshot {
+  id           String     @id @default(cuid())
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  snapshotDate DateTime
+  avgRating    Float
+  totalReviews Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([competitorId, snapshotDate])
+  @@index([competitorId])
+}
+
+// ─── Social Proof ────────────────────────────────────────────────────────────
+
+model SocialAccount {
+  id       String @id @default(cuid())
+  agencyId String
+  clientId String
+
+  platform     String
+  accountId    String
+  accountName  String?
+  accessToken  String?
+  refreshToken String?
+  expiresAt    DateTime?
+  isActive     Boolean @default(true)
+
+  posts SocialPost[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+model SocialPost {
+  id              String        @id @default(cuid())
+  socialAccountId String
+  socialAccount   SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  agencyId        String
+  clientId        String
+  reviewAssetId   String?
+
+  platform    String
+  caption     String?
+  mediaUrl    String?
+  postId      String?
+  status      String  @default("draft")
+  scheduledAt DateTime?
+  publishedAt DateTime?
+
+  metrics SocialMetric[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([socialAccountId])
+}
+
+model SocialMetric {
+  id         String     @id @default(cuid())
+  postId     String
+  post       SocialPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  date      DateTime
+  likes     Int @default(0)
+  comments  Int @default(0)
+  shares    Int @default(0)
+  reach     Int @default(0)
+  impressions Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([postId, date])
+}
+
+// ─── Ad Accounts ─────────────────────────────────────────────────────────────
+
+model AdAccount {
+  id       String @id @default(cuid())
+  agencyId String
+  clientId String
+
+  platform     String
+  accountId    String
+  accountName  String?
+  accessToken  String?
+  currency     String @default("USD")
+  timezone     String?
+  isActive     Boolean @default(true)
+
+  facebookAds FacebookAd[]
+  googleAds   GoogleAd[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+model FacebookAd {
+  id          String    @id @default(cuid())
+  adAccountId String
+  adAccount   AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  agencyId    String
+  clientId    String
+  reviewId    String?
+
+  campaignId   String?
+  adSetId      String?
+  adId         String?
+  headline     String?
+  primaryText  String?
+  description  String?
+  cta          String?
+  imageUrl     String?
+  status       String @default("draft")
+
+  spend       Decimal @default(0)
+  impressions Int     @default(0)
+  clicks      Int     @default(0)
+  ctr         Float   @default(0)
+  cpc         Float   @default(0)
+  leads       Int     @default(0)
+  roas        Float   @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([adAccountId])
+  @@index([clientId])
+}
+
+model GoogleAd {
+  id          String    @id @default(cuid())
+  adAccountId String
+  adAccount   AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  agencyId    String
+  clientId    String
+  reviewId    String?
+
+  campaignId   String?
+  adGroupId    String?
+  adId         String?
+  headlines    String[]
+  descriptions String[]
+  callouts     String[]
+  sitelinks    String[]
+  status       String @default("draft")
+
+  spend       Decimal @default(0)
+  impressions Int     @default(0)
+  clicks      Int     @default(0)
+  ctr         Float   @default(0)
+  cpc         Float   @default(0)
+  conversions Int     @default(0)
+  revenue     Decimal @default(0)
+  roas        Float   @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([adAccountId])
+  @@index([clientId])
+}
+
+// ─── AI Engine ───────────────────────────────────────────────────────────────
+
+model AiRecommendation {
+  id       String @id @default(cuid())
+  agencyId String
+  clientId String
+  locationId String?
+
+  title          String
+  description    String
+  category       String
+  priority       String @default("medium")
+  impactScore    Float  @default(0)
+  estimatedResult String?
+  dueDate        DateTime?
+  assignedUserId String?
+  status         String @default("pending")
+  completedAt    DateTime?
+
+  actions AiAction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+model AiAction {
+  id               String           @id @default(cuid())
+  recommendationId String?
+  recommendation   AiRecommendation? @relation(fields: [recommendationId], references: [id])
+  userId           String?
+  user             User?            @relation(fields: [userId], references: [id])
+  agencyId         String
+  clientId         String
+
+  actionType  String
+  prompt      String?
+  response    String?
+  model       String?
+  tokens      Int     @default(0)
+  cost        Decimal @default(0)
+  status      String  @default("pending")
+
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+  @@index([agencyId])
+}
+
+// ─── Tasks & Notifications ───────────────────────────────────────────────────
+
+model Task {
+  id         String  @id @default(cuid())
+  agencyId   String
+  clientId   String?
+  client     Client? @relation(fields: [clientId], references: [id])
+  creatorId  String
+  creator    User    @relation("TaskCreator", fields: [creatorId], references: [id])
+  assigneeId String?
+  assignee   User?   @relation("TaskAssignee", fields: [assigneeId], references: [id])
+
+  title       String
+  description String?
+  priority    String  @default("medium")
+  status      String  @default("todo")
+  dueDate     DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agencyId])
+  @@index([clientId])
+}
+
+model Notification {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agencyId String
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+
+  type      NotificationType
+  title     String
+  message   String
+  link      String?
+  isRead    Boolean @default(false)
+  readAt    DateTime?
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([agencyId])
+}
+
+model ActivityLog {
+  id       String @id @default(cuid())
+  userId   String?
+  user     User?  @relation(fields: [userId], references: [id])
+  agencyId String?
+  clientId String?
+
+  action      String
+  entity      String?
+  entityId    String?
+  description String?
+  metadata    Json?
+  ipAddress   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([agencyId])
+  @@index([clientId])
+}
+
+model AuditLog {
+  id       String @id @default(cuid())
+  userId   String?
+  user     User?  @relation(fields: [userId], references: [id])
+  agencyId String?
+  agency   Agency? @relation(fields: [agencyId], references: [id])
+
+  action     AuditAction
+  resource   String
+  resourceId String?
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([agencyId])
+  @@index([createdAt])
+}
